@@ -1,0 +1,22 @@
+# Xcode user-specific state
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Build artifacts
+build/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager (if you add packages later)
+.swiftpm/
+.build/
+
+# CocoaPods (only if you ever add pods — safe to leave in either way)
+Pods/
+
+# macOS junk
+.DS_Store
