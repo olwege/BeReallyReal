@@ -5,9 +5,17 @@
 //  Created by Oliver Wege on 26.08.26.
 //
 
+import Foundation
 import UserNotifications
 
 enum NotificationScheduler {
+    private static let weekdayStartHourKey = "weekdayReminderStartHour"
+    private static let weekdayEndHourKey = "weekdayReminderEndHour"
+    private static let weekendStartHourKey = "weekendReminderStartHour"
+    private static let weekendEndHourKey = "weekendReminderEndHour"
+
+    private static let defaultWeekdayWindow = ReminderWindow(startHour: 6, endHour: 22)
+    private static let defaultWeekendWindow = ReminderWindow(startHour: 8, endHour: 24)
 
     static func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
@@ -17,46 +25,104 @@ enum NotificationScheduler {
         }
     }
 
-    /// Schedules a single notification at a random time later today (or tomorrow if today's window has passed).
-    static func scheduleNext(windowStartHour: Int = 6, windowEndHour: Int = 23) {
+    /// Schedules the next notification at a random time inside the configured window.
+    static func scheduleNext() {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: ["dailyPhotoReminder"])
 
         let content = UNMutableNotificationContent()
         content.title = "Time for your daily photo"
-        content.body = "Capture today's moment 📸"
+        content.body = "Capture today's moment."
         content.sound = .default
 
         if Config.testModeFastNotifications {
-            // Fires every 60s, repeating — for testing only.
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 60, repeats: true)
             let request = UNNotificationRequest(identifier: "dailyPhotoReminder", content: content, trigger: trigger)
             center.add(request)
             return
         }
 
-        // --- normal random-once-daily logic below (unchanged) ---
         let calendar = Calendar.current
         let now = Date()
-        var targetDay = calendar.startOfDay(for: now)
-        let randomHour = Int.random(in: windowStartHour..<windowEndHour)
-        let randomMinute = Int.random(in: 0..<60)
-        var components = calendar.dateComponents([.year, .month, .day], from: targetDay)
-        components.hour = randomHour
-        components.minute = randomMinute
-        var fireDate = calendar.date(from: components) ?? now
-        if fireDate <= now {
-            targetDay = calendar.date(byAdding: .day, value: 1, to: targetDay) ?? targetDay
-            components = calendar.dateComponents([.year, .month, .day], from: targetDay)
-            components.hour = randomHour
-            components.minute = randomMinute
-            fireDate = calendar.date(from: components) ?? now
-        }
-        let trigger = UNCalendarNotificationTrigger(
-            dateMatching: calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate),
-            repeats: false
+        let today = calendar.startOfDay(for: now)
+
+        let fireDate = randomFireDate(on: today, after: now, calendar: calendar)
+            ?? randomFireDate(
+                on: calendar.date(byAdding: .day, value: 1, to: today) ?? today,
+                after: nil,
+                calendar: calendar
+            )
+            ?? now.addingTimeInterval(60 * 60)
+
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+
+        let request = UNNotificationRequest(
+            identifier: "dailyPhotoReminder",
+            content: content,
+            trigger: trigger
         )
-        let request = UNNotificationRequest(identifier: "dailyPhotoReminder", content: content, trigger: trigger)
+
         center.add(request)
     }
+
+    private static func randomFireDate(on day: Date, after minimumDate: Date?, calendar: Calendar) -> Date? {
+        let window = reminderWindow(for: day, calendar: calendar)
+
+        guard let windowStart = calendar.date(byAdding: .hour, value: window.startHour, to: day),
+              let windowEnd = calendar.date(byAdding: .hour, value: window.endHour, to: day)
+        else {
+            return nil
+        }
+
+        let earliestDate: Date
+
+        if let minimumDate, minimumDate > windowStart {
+            earliestDate = startOfNextMinute(after: minimumDate, calendar: calendar)
+        } else {
+            earliestDate = windowStart
+        }
+
+        guard earliestDate < windowEnd else {
+            return nil
+        }
+
+        let availableMinutes = max(1, Int(windowEnd.timeIntervalSince(earliestDate) / 60))
+        let randomOffset = Int.random(in: 0..<availableMinutes)
+
+        return calendar.date(byAdding: .minute, value: randomOffset, to: earliestDate)
+    }
+
+    private static func reminderWindow(for date: Date, calendar: Calendar) -> ReminderWindow {
+        let defaults = UserDefaults.standard
+
+        let fallback = calendar.isDateInWeekend(date) ? defaultWeekendWindow : defaultWeekdayWindow
+
+        let startKey = calendar.isDateInWeekend(date) ? weekendStartHourKey : weekdayStartHourKey
+        let endKey = calendar.isDateInWeekend(date) ? weekendEndHourKey : weekdayEndHourKey
+
+        let rawStartHour = defaults.object(forKey: startKey) as? Int ?? fallback.startHour
+        let rawEndHour = defaults.object(forKey: endKey) as? Int ?? fallback.endHour
+
+        let startHour = min(max(rawStartHour, 0), 23)
+        let endHour = min(max(rawEndHour, 1), 24)
+
+        guard startHour < endHour else {
+            return fallback
+        }
+
+        return ReminderWindow(startHour: startHour, endHour: endHour)
+    }
+
+    private static func startOfNextMinute(after date: Date, calendar: Calendar) -> Date {
+        let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+        let startOfCurrentMinute = calendar.date(from: components) ?? date
+
+        return calendar.date(byAdding: .minute, value: 1, to: startOfCurrentMinute) ?? date.addingTimeInterval(60)
+    }
+}
+
+private struct ReminderWindow {
+    let startHour: Int
+    let endHour: Int
 }

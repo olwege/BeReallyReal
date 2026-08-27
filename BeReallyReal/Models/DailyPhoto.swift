@@ -9,10 +9,33 @@ import Foundation
 
 struct DailyPhoto: Identifiable, Codable {
     let id: UUID
-    let date: Date          // normalized to midnight, used as the "day key"
-    let capturedAt: Date    // actual capture timestamp
+    let date: Date
+    let capturedAt: Date
     let backImageFilename: String
     let frontImageFilename: String
+    let caption: String?
+    let latitude: Double?
+    let longitude: Double?
+
+    init(
+        id: UUID,
+        date: Date,
+        capturedAt: Date,
+        backImageFilename: String,
+        frontImageFilename: String,
+        caption: String? = nil,
+        latitude: Double? = nil,
+        longitude: Double? = nil
+    ) {
+        self.id = id
+        self.date = date
+        self.capturedAt = capturedAt
+        self.backImageFilename = backImageFilename
+        self.frontImageFilename = frontImageFilename
+        self.caption = caption
+        self.latitude = latitude
+        self.longitude = longitude
+    }
 
     var dayKey: String {
         DailyPhoto.dayKeyFormatter.string(from: date)
