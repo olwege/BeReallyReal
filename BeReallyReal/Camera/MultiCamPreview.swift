@@ -7,6 +7,7 @@
 
 import SwiftUI
 import AVFoundation
+import UIKit
 
 struct MultiCamPreview: UIViewRepresentable {
     let camera: CameraManager
@@ -31,19 +32,24 @@ final class PreviewContainerView: UIView, UIGestureRecognizerDelegate {
     private var frontBorderView: UIView?
     private var frontPhotoView: UIView?
 
+    private var backZoomLabel: UILabel?
+    private var frontZoomLabel: UILabel?
+
     private weak var backPinchGesture: UIPinchGestureRecognizer?
     private weak var frontPinchGesture: UIPinchGestureRecognizer?
 
     private var initialBackZoom: Double = 1
     private var initialFrontZoom: Double = 1
 
-    // ‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑-
-    // The front‑camera overlay has a border that used to be 2 pts wide.
-    // Reduce it by 25 % → 2 × 0.75 = 1.5 pts.
-    private let frontPreviewBorderWidth: CGFloat = 1.5
-    // ‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑‑
+    private var backZoomHideWorkItem: DispatchWorkItem?
+    private var frontZoomHideWorkItem: DispatchWorkItem?
 
+    private let frontPreviewBorderWidth: CGFloat = 1.5
     private let frontPreviewAspectRatio: CGFloat = 1.4
+
+    private let shutterButtonDiameter: CGFloat = 72
+    private let shutterButtonBottomPadding: CGFloat = 40
+    private let backZoomLabelHorizontalGapFromShutter: CGFloat = 14
 
     private var frontPreviewSize: CGSize {
         let height = bounds.height * 0.3
@@ -69,8 +75,6 @@ final class PreviewContainerView: UIView, UIGestureRecognizerDelegate {
         // -------- BACK CAMERA ----------
         let back = AVCaptureVideoPreviewLayer()
         back.setSessionWithNoConnection(session)
-
-        // Use .resizeAspectFill so the back preview fills the whole view (no black bars)
         back.videoGravity = .resizeAspectFill
         back.frame = bounds
         layer.addSublayer(back)
@@ -95,6 +99,14 @@ final class PreviewContainerView: UIView, UIGestureRecognizerDelegate {
         photoView.layer.addSublayer(front)
         frontLayer = front
 
+        let frontLabel = makeZoomLabel()
+        photoView.addSubview(frontLabel)
+        frontZoomLabel = frontLabel
+
+        let backLabel = makeZoomLabel()
+        addSubview(backLabel)
+        backZoomLabel = backLabel
+
         // -------- GESTURES ----------
         let backPinch = UIPinchGestureRecognizer(target: self, action: #selector(handleBackPinch(_:)))
         backPinch.delegate = self
@@ -108,11 +120,30 @@ final class PreviewContainerView: UIView, UIGestureRecognizerDelegate {
 
         connectPreviewLayers(to: session)
 
+        updateBackZoomLabelText()
+        updateFrontZoomLabelText()
+
         setNeedsLayout()
     }
 
     func updateCamera(_ camera: CameraManager) {
         self.camera = camera
+        updateBackZoomLabelText()
+        updateFrontZoomLabelText()
+    }
+
+    private func makeZoomLabel() -> UILabel {
+        let label = UILabel()
+        label.textColor = .white
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        label.textAlignment = .center
+        label.font = .monospacedDigitSystemFont(ofSize: 15, weight: .semibold)
+        label.layer.cornerRadius = 15
+        label.clipsToBounds = true
+        label.isHidden = true
+        label.alpha = 0
+        label.isUserInteractionEnabled = false
+        return label
     }
 
     private func connectPreviewLayers(to session: AVCaptureMultiCamSession) {
@@ -172,6 +203,129 @@ final class PreviewContainerView: UIView, UIGestureRecognizerDelegate {
         if let frontPhotoView {
             frontLayer?.frame = frontPhotoView.bounds
         }
+
+        layoutBackZoomLabel()
+        layoutFrontZoomLabel()
+
+        if let backZoomLabel {
+            bringSubviewToFront(backZoomLabel)
+        }
+    }
+
+    private func layoutBackZoomLabel() {
+        guard let backZoomLabel else { return }
+
+        let width: CGFloat = 76
+        let height: CGFloat = 34
+        let horizontalInset: CGFloat = 16
+
+        let shutterCenterX = bounds.midX
+        let shutterCenterY = bounds.maxY
+            - safeAreaInsets.bottom
+            - shutterButtonBottomPadding
+            - shutterButtonDiameter / 2
+
+        let preferredX = shutterCenterX
+            + shutterButtonDiameter / 2
+            + backZoomLabelHorizontalGapFromShutter
+
+        let fallbackX = shutterCenterX
+            - shutterButtonDiameter / 2
+            - backZoomLabelHorizontalGapFromShutter
+            - width
+
+        let x: CGFloat
+        if preferredX + width <= bounds.maxX - horizontalInset {
+            x = preferredX
+        } else {
+            x = max(horizontalInset, fallbackX)
+        }
+
+        backZoomLabel.frame = CGRect(
+            x: x,
+            y: shutterCenterY - height / 2,
+            width: width,
+            height: height
+        )
+    }
+
+    private func layoutFrontZoomLabel() {
+        guard let frontZoomLabel,
+              let frontPhotoView else { return }
+
+        let width = min(CGFloat(70), max(frontPhotoView.bounds.width - 16, 44))
+        let height: CGFloat = 28
+
+        frontZoomLabel.frame = CGRect(
+            x: frontPhotoView.bounds.midX - width / 2,
+            y: frontPhotoView.bounds.maxY - height - 8,
+            width: width,
+            height: height
+        )
+    }
+
+    private func updateBackZoomLabelText() {
+        guard let camera else { return }
+        backZoomLabel?.text = String(format: "%.1fx", camera.backDisplayZoom)
+    }
+
+    private func updateFrontZoomLabelText() {
+        guard let camera else { return }
+        frontZoomLabel?.text = String(format: "%.1fx", camera.frontDisplayZoom)
+    }
+
+    private func showBackZoomLabel() {
+        backZoomHideWorkItem?.cancel()
+        updateBackZoomLabelText()
+        showZoomLabel(backZoomLabel)
+    }
+
+    private func showFrontZoomLabel() {
+        frontZoomHideWorkItem?.cancel()
+        updateFrontZoomLabelText()
+        showZoomLabel(frontZoomLabel)
+    }
+
+    private func hideBackZoomLabelAfterDelay() {
+        backZoomHideWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.hideZoomLabel(self?.backZoomLabel)
+        }
+
+        backZoomHideWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
+    }
+
+    private func hideFrontZoomLabelAfterDelay() {
+        frontZoomHideWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.hideZoomLabel(self?.frontZoomLabel)
+        }
+
+        frontZoomHideWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: workItem)
+    }
+
+    private func showZoomLabel(_ label: UILabel?) {
+        guard let label else { return }
+
+        label.isHidden = false
+
+        UIView.animate(withDuration: 0.12) {
+            label.alpha = 1
+        }
+    }
+
+    private func hideZoomLabel(_ label: UILabel?) {
+        guard let label else { return }
+
+        UIView.animate(withDuration: 0.2) {
+            label.alpha = 0
+        } completion: { _ in
+            label.isHidden = true
+        }
     }
 
     // MARK: - Pinch handling
@@ -182,8 +336,17 @@ final class PreviewContainerView: UIView, UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             initialBackZoom = camera.backZoom
-        case .changed, .ended:
+            showBackZoomLabel()
+
+        case .changed:
             camera.setBackZoom(scale: recognizer.scale, startingAt: initialBackZoom)
+            showBackZoomLabel()
+
+        case .ended, .cancelled, .failed:
+            camera.setBackZoom(scale: recognizer.scale, startingAt: initialBackZoom)
+            showBackZoomLabel()
+            hideBackZoomLabelAfterDelay()
+
         default:
             break
         }
@@ -195,8 +358,17 @@ final class PreviewContainerView: UIView, UIGestureRecognizerDelegate {
         switch recognizer.state {
         case .began:
             initialFrontZoom = camera.frontZoom
-        case .changed, .ended:
+            showFrontZoomLabel()
+
+        case .changed:
             camera.setFrontZoom(scale: recognizer.scale, startingAt: initialFrontZoom)
+            showFrontZoomLabel()
+
+        case .ended, .cancelled, .failed:
+            camera.setFrontZoom(scale: recognizer.scale, startingAt: initialFrontZoom)
+            showFrontZoomLabel()
+            hideFrontZoomLabelAfterDelay()
+
         default:
             break
         }

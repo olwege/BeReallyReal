@@ -270,6 +270,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BeReallyReal/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BeReallyReal.;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to take your daily photo.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Used to save your location with memories when you choose to include it.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Used to export your photo memories.";
@@ -306,6 +307,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BeReallyReal/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = BeReallyReal.;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to take your daily photo.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Used to save your location with memories when you choose to include it.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Used to export your photo memories.";

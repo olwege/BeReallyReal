@@ -6,10 +6,12 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct CalendarView: View {
     @EnvironmentObject var store: PhotoStore
-    @State private var displayedMonth = Date()
+    @State private var selectedSection: CalendarSection = .calendar
+    @State private var displayedMonth = Calendar.current.startOfDay(for: Date())
     @State private var selectedDate: Date?
 
     @State private var photoPendingDeletion: DailyPhoto?
@@ -22,11 +24,13 @@ struct CalendarView: View {
     @State private var clearConfirmationText = ""
 
     @State private var showingSettings = false
+    @State private var showingMonthYearPicker = false
 
-    @State private var monthDays: [CalendarDayItem] = []
+    @State private var preparedBulkShareItem: PreparedBulkShareItem?
+    @State private var isPreparingBulkShare = false
 
-    private let gridColumnSpacing: CGFloat = 10
-    private let gridHorizontalPadding: CGFloat = 16
+    private let gridColumnSpacing: CGFloat = 6
+    private let gridHorizontalPadding: CGFloat = 10
 
     var body: some View {
         NavigationStack {
@@ -41,59 +45,55 @@ struct CalendarView: View {
                 )
                 .ignoresSafeArea()
 
-                GeometryReader { proxy in
-                    let cellWidth = gridCellWidth(for: proxy.size.width)
-                    let columns = Array(
-                        repeating: GridItem(.fixed(cellWidth), spacing: gridColumnSpacing),
-                    count: 7
-                )
+                Group {
+                    switch selectedSection {
+                    case .calendar:
+                        calendarContent
 
-                    ScrollView {
-                        VStack(spacing: 18) {
-                            monthHeader
-                                .padding(.top, 8)
+                    case .yearsAgo:
+                        YearsAgoView(selectedDate: $selectedDate)
+                            .environmentObject(store)
 
-                            weekdayHeader(cellWidth: cellWidth)
+                    case .timeFeed:
+                        TimeFeedView(selectedDate: $selectedDate)
+                            .environmentObject(store)
 
-                            LazyVGrid(columns: columns, spacing: 12) {
-                                ForEach(monthDays) { item in
-                                    DayCell(date: item.date, cellWidth: cellWidth)
-                                        .environmentObject(store)
-                                        .onTapGesture {
-                                            guard let date = item.date else { return }
-                                            if store.hasEntry(for: date) {
-                                                selectedDate = date
-                                            }
-                                        }
-                                        .contextMenu {
-                                            if let date = item.date {
-                                                ForEach(store.photos(for: date)) { photo in
-                                                    Button(role: .destructive) {
-                                                        requestDelete(photo)
-                                                    } label: {
-                                                        Label(
-                                                            "Delete \(photo.capturedAt.formatted(date: .omitted, time: .shortened))",
-                                                            systemImage: "trash"
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                }
-                            }
-                            .padding(.horizontal, gridHorizontalPadding)
-
-                            Spacer(minLength: 24)
-                        }
+                    case .map:
+                        PhotoMapView(selectedDate: $selectedDate)
+                            .environmentObject(store)
                     }
                 }
             }
-            .navigationTitle("Memories")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Menu {
+                        ForEach(CalendarSection.allCases) { section in
+                            Button {
+                                selectedSection = section
+                            } label: {
+                                Label(section.title, systemImage: section.systemImage)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(selectedSection.title)
+                                .font(.headline)
+
+                            Image(systemName: "chevron.down")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .foregroundColor(.primary)
+                    }
+                    .accessibilityLabel("Choose Calendar view")
+                }
+
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Today") {
-                        goToToday()
+                    if selectedSection == .calendar {
+                        Button("Today") {
+                            goToToday()
+                        }
                     }
                 }
 
@@ -107,17 +107,35 @@ struct CalendarView: View {
 
                         Divider()
 
-                        ShareLink(items: store.shareURLs(inMonthOf: displayedMonth)) {
-                            Label("Share this month", systemImage: "square.and.arrow.up")
+                        Button {
+                            prepareBulkShare(.month(displayedMonth))
+                        } label: {
+                            Label(
+                                isPreparingBulkShare ? "Preparing Share" : "Share this month",
+                                systemImage: "square.and.arrow.up"
+                            )
                         }
+                        .disabled(isPreparingBulkShare)
 
-                        ShareLink(items: store.shareURLs(inYearOf: displayedMonth)) {
-                            Label("Share this year", systemImage: "square.and.arrow.up")
+                        Button {
+                            prepareBulkShare(.year(displayedMonth))
+                        } label: {
+                            Label(
+                                isPreparingBulkShare ? "Preparing Share" : "Share this year",
+                                systemImage: "square.and.arrow.up"
+                            )
                         }
+                        .disabled(isPreparingBulkShare)
 
-                        ShareLink(items: store.allShareURLs()) {
-                            Label("Share everything", systemImage: "square.and.arrow.up")
+                        Button {
+                            prepareBulkShare(.all)
+                        } label: {
+                            Label(
+                                isPreparingBulkShare ? "Preparing Share" : "Share everything",
+                                systemImage: "square.and.arrow.up"
+                            )
                         }
+                        .disabled(isPreparingBulkShare)
 
                         Divider()
 
@@ -175,6 +193,18 @@ struct CalendarView: View {
                     showingSettings = false
                 }
             }
+            .sheet(isPresented: $showingMonthYearPicker) {
+                MonthYearPickerView(
+                    displayedMonth: Binding(
+                        get: {
+                            displayedMonth
+                        },
+                        set: { newMonth in
+                            jumpToMonth(newMonth)
+                        }
+                    )
+                )
+            }
             .sheet(isPresented: $showingTypedClearConfirm) {
                 ClearAllConfirmationView(
                     confirmationText: $clearConfirmationText,
@@ -189,6 +219,9 @@ struct CalendarView: View {
                     }
                 )
             }
+            .sheet(item: $preparedBulkShareItem) { item in
+                CalendarActivityView(activityItems: item.urls)
+            }
             .sheet(item: Binding(
                 get: { selectedDate.map { IdentifiableDate(date: $0) } },
                 set: { selectedDate = $0?.date }
@@ -197,11 +230,37 @@ struct CalendarView: View {
                     .environmentObject(store)
             }
         }
-        .onAppear {
-            monthDays = CalendarView.generateDays(for: displayedMonth)
-        }
-        .onChange(of: displayedMonth) {
-            monthDays = CalendarView.generateDays(for: displayedMonth)
+    }
+
+    private var calendarContent: some View {
+        GeometryReader { proxy in
+            let cellWidth = gridCellWidth(for: proxy.size.width)
+            let columns = Array(
+                repeating: GridItem(.fixed(cellWidth), spacing: gridColumnSpacing),
+                count: 7
+            )
+
+            VStack(spacing: 0) {
+                monthHeader
+                    .padding(.top, 8)
+
+                ScrollView {
+                    MonthGridSection(
+                        month: displayedMonth,
+                        cellWidth: cellWidth,
+                        columns: columns,
+                        weekdaySymbols: weekdaySymbols(),
+                        gridColumnSpacing: gridColumnSpacing,
+                        gridHorizontalPadding: gridHorizontalPadding,
+                        selectedDate: $selectedDate,
+                        requestDelete: { photo in
+                            requestDelete(photo)
+                        }
+                    )
+                    .environmentObject(store)
+                    .padding(.vertical, 8)
+                }
+            }
         }
     }
 
@@ -220,15 +279,27 @@ struct CalendarView: View {
                     .clipShape(Circle())
             }
 
-            VStack(spacing: 2) {
-                Text(displayedMonth, format: .dateTime.month(.wide))
-                    .font(.title2.weight(.bold))
+            Button {
+                showingMonthYearPicker = true
+            } label: {
+                VStack(spacing: 2) {
+                    Text(displayedMonth, format: .dateTime.month(.wide))
+                        .font(.title2.weight(.bold))
 
-                Text(displayedMonth, format: .dateTime.year())
-                    .font(.caption.weight(.medium))
+                    HStack(spacing: 4) {
+                        Text(displayedMonth, format: .dateTime.year())
+                            .font(.caption.weight(.medium))
+
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.bold))
+                    }
                     .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Choose month and year")
 
             Button {
                 shiftMonth(1)
@@ -247,28 +318,28 @@ struct CalendarView: View {
         .padding(.horizontal)
     }
 
-    private func weekdayHeader(cellWidth: CGFloat) -> some View {
-        HStack(spacing: gridColumnSpacing) {
-            ForEach(weekdaySymbols(), id: \.self) { symbol in
-                Text(symbol.prefix(1))
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(.secondary)
-                    .frame(width: cellWidth)
-            }
-        }
-        .padding(.horizontal, gridHorizontalPadding)
-    }
-
     // MARK: Helper Actions
 
     private func goToToday() {
-        displayedMonth = Date()
+        jumpToMonth(Date())
     }
 
     private func shiftMonth(_ delta: Int) {
-        if let newDate = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) {
-            displayedMonth = newDate
+        guard let newDate = Calendar.current.date(byAdding: .month, value: delta, to: displayedMonth) else {
+            return
         }
+
+        jumpToMonth(newDate)
+    }
+
+    private func jumpToMonth(_ month: Date) {
+        displayedMonth = startOfMonth(month)
+    }
+
+    private func startOfMonth(_ date: Date) -> Date {
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: date)
+        return calendar.date(from: components) ?? calendar.startOfDay(for: date)
     }
 
     private func weekdaySymbols() -> [String] {
@@ -285,9 +356,50 @@ struct CalendarView: View {
         return max(floor(usableWidth / 7), 1)
     }
 
+    private enum BulkShareScope {
+        case month(Date)
+        case year(Date)
+        case all
+    }
+
+    private func prepareBulkShare(_ scope: BulkShareScope) {
+        guard !isPreparingBulkShare else { return }
+
+        isPreparingBulkShare = true
+
+        Task {
+            let urls: [URL]
+
+            switch scope {
+            case .month(let date):
+                urls = store.shareURLs(inMonthOf: date)
+
+            case .year(let date):
+                urls = store.shareURLs(inYearOf: date)
+
+            case .all:
+                urls = store.allShareURLs()
+            }
+
+            await MainActor.run {
+                if !urls.isEmpty {
+                    preparedBulkShareItem = PreparedBulkShareItem(urls: urls)
+                }
+
+                isPreparingBulkShare = false
+            }
+        }
+    }
+
     // MARK: Day-generation
 
     private static let sharedCalendar = Calendar.current
+
+    private static let monthIDFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM"
+        return fmt
+    }()
 
     private static let dayKeyFormatter: DateFormatter = {
         let fmt = DateFormatter()
@@ -296,7 +408,7 @@ struct CalendarView: View {
         return fmt
     }()
 
-    private static func generateDays(for month: Date) -> [CalendarDayItem] {
+    fileprivate static func generateDays(for month: Date) -> [CalendarDayItem] {
         let calendar = sharedCalendar
 
         guard
@@ -334,6 +446,414 @@ struct CalendarView: View {
     }
 }
 
+private struct MonthGridSection: View {
+    @EnvironmentObject var store: PhotoStore
+
+    let month: Date
+    let cellWidth: CGFloat
+    let columns: [GridItem]
+    let weekdaySymbols: [String]
+    let gridColumnSpacing: CGFloat
+    let gridHorizontalPadding: CGFloat
+    @Binding var selectedDate: Date?
+
+    let requestDelete: (DailyPhoto) -> Void
+
+    private var monthDays: [CalendarDayItem] {
+        CalendarView.generateDays(for: month)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            weekdayHeader
+
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(monthDays) { item in
+                    DayCell(date: item.date, cellWidth: cellWidth)
+                        .environmentObject(store)
+                        .onTapGesture {
+                            guard let date = item.date else { return }
+                            if store.hasEntry(for: date) {
+                                selectedDate = date
+                            }
+                        }
+                        .contextMenu {
+                            if let date = item.date {
+                                ForEach(store.photos(for: date)) { photo in
+                                    Button(role: .destructive) {
+                                        requestDelete(photo)
+                                    } label: {
+                                        Label(
+                                            "Delete \(photo.capturedAt.formatted(date: .omitted, time: .shortened))",
+                                            systemImage: "trash"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                }
+            }
+            .padding(.horizontal, gridHorizontalPadding)
+        }
+    }
+
+    private var weekdayHeader: some View {
+        HStack(spacing: gridColumnSpacing) {
+            ForEach(weekdaySymbols, id: \.self) { symbol in
+                Text(symbol.prefix(1))
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: cellWidth)
+            }
+        }
+        .padding(.horizontal, gridHorizontalPadding)
+    }
+}
+
+private enum CalendarSection: String, CaseIterable, Identifiable {
+    case calendar
+    case yearsAgo
+    case timeFeed
+    case map
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .calendar:
+            "Calendar"
+        case .yearsAgo:
+            "Years ago"
+        case .timeFeed:
+            "Time Feed"
+        case .map:
+            "Map"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .calendar:
+            "calendar"
+        case .yearsAgo:
+            "clock.arrow.circlepath"
+        case .timeFeed:
+            "rectangle.grid.2x2"
+        case .map:
+            "map"
+        }
+    }
+}
+
+private struct MonthYearPickerView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    @Binding var displayedMonth: Date
+
+    @State private var selectedMonth: Int
+    @State private var selectedYear: Int
+
+    private let calendar = Calendar.current
+
+    private var monthSymbols: [String] {
+        calendar.monthSymbols
+    }
+
+    private var yearRange: [Int] {
+        let currentYear = calendar.component(.year, from: Date())
+        return Array((currentYear - 50)...(currentYear + 10))
+    }
+
+    init(displayedMonth: Binding<Date>) {
+        _displayedMonth = displayedMonth
+
+        let calendar = Calendar.current
+        let components = calendar.dateComponents([.year, .month], from: displayedMonth.wrappedValue)
+
+        _selectedMonth = State(initialValue: components.month ?? calendar.component(.month, from: Date()))
+        _selectedYear = State(initialValue: components.year ?? calendar.component(.year, from: Date()))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker("Month", selection: $selectedMonth) {
+                        ForEach(1...12, id: \.self) { month in
+                            Text(monthSymbols[month - 1])
+                                .tag(month)
+                        }
+                    }
+
+                    Picker("Year", selection: $selectedYear) {
+                        ForEach(yearRange, id: \.self) { year in
+                            Text(String(year))
+                                .tag(year)
+                        }
+                    }
+                }
+
+                Section {
+                    Button {
+                        let today = Date()
+                        selectedMonth = calendar.component(.month, from: today)
+                        selectedYear = calendar.component(.year, from: today)
+                    } label: {
+                        Label("Jump to current month", systemImage: "calendar")
+                    }
+                }
+            }
+            .navigationTitle("Choose Month")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Apply") {
+                        applySelection()
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
+    }
+
+    private func applySelection() {
+        var components = DateComponents()
+        components.year = selectedYear
+        components.month = selectedMonth
+        components.day = 1
+
+        if let date = calendar.date(from: components) {
+            displayedMonth = date
+        }
+    }
+}
+
+private struct YearsAgoView: View {
+    @EnvironmentObject var store: PhotoStore
+    @Binding var selectedDate: Date?
+
+    @State private var selectedYearsAgo = 1
+
+    private var yearsAgoPhoto: DailyPhoto? {
+        let calendar = Calendar.current
+        let now = Date()
+
+        guard let targetDate = calendar.date(byAdding: .year, value: -selectedYearsAgo, to: now),
+              let lowerBound = calendar.date(byAdding: .day, value: -14, to: targetDate),
+              let upperBound = calendar.date(byAdding: .day, value: 14, to: targetDate)
+        else {
+            return nil
+        }
+
+        return store.photos
+            .filter { photo in
+                photo.capturedAt >= lowerBound && photo.capturedAt <= upperBound
+            }
+            .min { first, second in
+                abs(first.capturedAt.timeIntervalSince(targetDate)) < abs(second.capturedAt.timeIntervalSince(targetDate))
+            }
+    }
+
+    private var yearsAgoText: String {
+        selectedYearsAgo == 1 ? "1 year ago" : "\(selectedYearsAgo) years ago"
+    }
+
+    private var noMemoryText: String {
+        selectedYearsAgo == 1
+            ? "no memory from a year ago :("
+            : "no memory from \(selectedYearsAgo) years ago :("
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                Stepper(value: $selectedYearsAgo, in: 1...50) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Show memory from")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Text(yearsAgoText)
+                            .font(.headline)
+                    }
+                }
+                .padding()
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                if let photo = yearsAgoPhoto {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Closest memory from \(yearsAgoText)")
+                            .font(.headline)
+
+                        PhotoFeedCard(photo: photo, imageMode: .fullResolution)
+                            .environmentObject(store)
+                            .onTapGesture {
+                                selectedDate = photo.date
+                            }
+
+                        Text(photo.capturedAt, format: .dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        if let caption = photo.caption, !caption.isEmpty {
+                            Text(caption)
+                                .font(.body)
+                        }
+                    }
+                    .padding()
+                    .background(.background)
+                    .clipShape(RoundedRectangle(cornerRadius: 24))
+                    .shadow(color: .black.opacity(0.06), radius: 10, y: 4)
+                } else {
+                    ContentUnavailableView(
+                        noMemoryText,
+                        systemImage: "calendar.badge.exclamationmark",
+                        description: Text("Nothing was found within two weeks of this day \(yearsAgoText).")
+                    )
+                    .padding(.top, 48)
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+private struct TimeFeedView: View {
+    @EnvironmentObject var store: PhotoStore
+    @Binding var selectedDate: Date?
+
+    private var sortedPhotos: [DailyPhoto] {
+        store.photos.sorted { $0.capturedAt > $1.capturedAt }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let spacing: CGFloat = 12
+            let horizontalPadding: CGFloat = 16
+            let columnWidth = max((proxy.size.width - horizontalPadding * 2 - spacing) / 2, 1)
+
+            let columns = [
+                GridItem(.fixed(columnWidth), spacing: spacing),
+                GridItem(.fixed(columnWidth), spacing: spacing)
+            ]
+
+            ScrollView {
+                if sortedPhotos.isEmpty {
+                    ContentUnavailableView(
+                        "No photos yet",
+                        systemImage: "photo.on.rectangle.angled",
+                        description: Text("Your time feed will appear here after you take photos.")
+                    )
+                    .padding(.top, 80)
+                    .frame(maxWidth: .infinity)
+                } else {
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(sortedPhotos) { photo in
+                            PhotoFeedCard(photo: photo, imageMode: .thumbnail(.medium))
+                                .environmentObject(store)
+                                .onTapGesture {
+                                    selectedDate = photo.date
+                                }
+                        }
+                    }
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, 16)
+                }
+            }
+        }
+    }
+}
+
+private enum PhotoFeedCardImageMode {
+    case thumbnail(PhotoThumbnailSize)
+    case fullResolution
+}
+
+private struct PhotoFeedCard: View {
+    @EnvironmentObject var store: PhotoStore
+
+    let photo: DailyPhoto
+    let imageMode: PhotoFeedCardImageMode
+
+    @State private var image: UIImage?
+
+    private let imageCornerRadius: CGFloat = 16
+    private let cardPadding: CGFloat = 6
+
+    init(
+        photo: DailyPhoto,
+        imageMode: PhotoFeedCardImageMode = .thumbnail(.small)
+    ) {
+        self.photo = photo
+        self.imageMode = imageMode
+    }
+
+    private var taskID: String {
+        switch imageMode {
+        case .thumbnail(let size):
+            "\(photo.id.uuidString)-thumbnail-\(size.rawValue)"
+        case .fullResolution:
+            "\(photo.id.uuidString)-full"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: imageCornerRadius))
+            } else {
+                RoundedRectangle(cornerRadius: imageCornerRadius)
+                    .fill(Color(.secondarySystemGroupedBackground))
+                    .aspectRatio(1 / PhotoCompositionStyle.previewAspectRatio, contentMode: .fit)
+                    .overlay {
+                        Image(systemName: "photo")
+                            .font(.title2)
+                            .foregroundColor(.secondary)
+                    }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(photo.capturedAt, format: .dateTime.month(.abbreviated).day().year())
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                Text(photo.capturedAt, format: .dateTime.hour().minute())
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 2)
+        }
+        .padding(cardPadding)
+        .background(.background)
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+        .contentShape(RoundedRectangle(cornerRadius: 20))
+        .task(id: taskID) {
+            switch imageMode {
+            case .thumbnail(let size):
+                image = await store.thumbnail(for: photo, size: size)
+
+            case .fullResolution:
+                image = store.combinedImage(for: photo)
+            }
+        }
+    }
+}
+
 private struct DayCell: View {
     @EnvironmentObject var store: PhotoStore
 
@@ -342,6 +862,14 @@ private struct DayCell: View {
 
     @State private var thumbnail: UIImage? = nil
 
+    private var photoHeight: CGFloat {
+        cellWidth
+    }
+
+    private var dayLabelHeight: CGFloat {
+        14
+    }
+
     var body: some View {
         Group {
             if let date {
@@ -349,35 +877,35 @@ private struct DayCell: View {
                 let hasPhotos = !photos.isEmpty
                 let isToday = Calendar.current.isDateInToday(date)
 
-                VStack(spacing: 6) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(hasPhotos ? Color.clear : Color(.secondarySystemGroupedBackground))
+                VStack(spacing: 2) {
+                    ZStack(alignment: .top) {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(.secondarySystemGroupedBackground))
 
                         if let img = thumbnail {
                             Image(uiImage: img)
                                 .resizable()
                                 .scaledToFill()
-                                .frame(width: cellWidth, height: 58)
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .frame(width: cellWidth, height: photoHeight, alignment: .top)
                                 .clipped()
                         }
                     }
-                    .frame(width: cellWidth, height: 58)
+                    .frame(width: cellWidth, height: photoHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(alignment: .topTrailing) {
                         if photos.count > 1 {
                             Text("\(photos.count)")
                                 .font(.caption2.weight(.bold))
                                 .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
                                 .background(.black.opacity(0.65))
                                 .clipShape(Capsule())
-                                .padding(4)
+                                .padding(3)
                         }
                     }
                     .overlay {
-                        RoundedRectangle(cornerRadius: 16)
+                        RoundedRectangle(cornerRadius: 12)
                             .strokeBorder(
                                 isToday ? Color.accentColor : Color.black.opacity(0.06),
                                 lineWidth: 2
@@ -385,32 +913,31 @@ private struct DayCell: View {
                     }
 
                     Text(date, format: .dateTime.day())
-                        .font(.caption.weight(.medium))
+                        .font(.caption2.weight(.semibold))
                         .monospacedDigit()
                         .foregroundColor(isToday ? .accentColor : .secondary)
-                        .frame(width: cellWidth)
+                        .frame(width: cellWidth, height: dayLabelHeight, alignment: .top)
                 }
-                .frame(width: cellWidth, height: 82)
+                .frame(width: cellWidth, height: photoHeight + dayLabelHeight + 2, alignment: .top)
                 .contentShape(Rectangle())
+                .opacity(hasPhotos ? 1 : 0.55)
                 .task(id: photos.first?.id) {
                     guard let first = photos.first else {
                         thumbnail = nil
                         return
                     }
 
-                    if let thumb = await store.thumbnail(for: first) {
-                        thumbnail = thumb
-                    }
+                    thumbnail = await store.thumbnail(for: first)
                 }
             } else {
                 Color.clear
-                    .frame(width: cellWidth, height: 82)
+                    .frame(width: cellWidth, height: photoHeight + dayLabelHeight + 2)
             }
         }
     }
 }
 
-private struct CalendarDayItem: Identifiable {
+fileprivate struct CalendarDayItem: Identifiable {
     let id: String
     let date: Date?
 }
@@ -461,4 +988,20 @@ private struct ClearAllConfirmationView: View {
 private struct IdentifiableDate: Identifiable {
     let date: Date
     var id: TimeInterval { date.timeIntervalSince1970 }
+}
+
+private struct PreparedBulkShareItem: Identifiable {
+    let id = UUID()
+    let urls: [URL]
+}
+
+private struct CalendarActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {
+    }
 }

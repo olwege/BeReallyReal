@@ -1,0 +1,41 @@
+\documentclass[margin=0mm]{standalone}
+
+% Packages.
+\usepackage{xcolor}
+\usepackage{tikz}
+
+% Colors.
+\input{wadacolors.tex}
+
+\begin{document}
+
+\begin{tikzpicture}[font=\bfseries\color{white}]
+  \fill[black!0] (0,0) rectangle (1,1);
+  \fill[white] (0.5,0.5) circle (.35);
+  \foreach \i in {0.2,0.3,...,0.9}{
+    \foreach \j in {0.4,0.5,...,0.6}{
+      \fill[Jasper_Red, draw=Burnt_Sienna, rounded corners=0.01cm] (\i,\j)++(-0.03,-0.03) rectangle ++(0.06,0.06); 
+    }
+  }
+  \foreach \i in {0.5,0.6,...,0.9}{
+    \fill[Jasper_Red, draw=Burnt_Sienna, rounded corners=0.01cm] (\i,0.7)++(-0.03,-0.03) rectangle ++(0.06,0.06); 
+  }
+  \foreach \i in {0.2,0.3,...,0.7}{
+    \fill[Jasper_Red, draw=Burnt_Sienna, rounded corners=0.01cm] (\i,0.3)++(-0.03,-0.03) rectangle ++(0.06,0.06); 
+  }
+  \draw[Black!80,line width=0.08cm,opacity=.75] (0.5,0.5) circle (.33);
+  \draw[Neutral_Gray,line width=0.1cm] (0.5,0.5) circle (.36);
+  \draw[Black,line width=0.08cm] (0.5,0.5) circle (.35);
+  \draw[Neutral_Gray,line width=0.15pt,opacity=.5] (0.5,0.5) circle (.33);
+  \draw[Neutral_Gray,line width=0.1pt,opacity=.5] (0.5,0.5) circle (.3025);
+
+  \fill[Light_Glaucous_Blue,opacity=.75, rounded corners=2pt] (0.5,0.5) -- ++(0,.25) arc (90:180:.25) -- cycle;
+  \fill[Light_Glaucous_Blue,opacity=.75, rounded corners=2pt] (0.5,0.5) -- ++(0,-.35) arc (270:360:.35) -- cycle;
+  \fill[Deep_Lyons_Blue,opacity=.4, rounded corners=2pt] (0.5,0.5)++(135:.02) -- ++(0,.2) arc (90:180:.2) -- cycle;
+  \fill[Deep_Lyons_Blue,opacity=.4, rounded corners=2pt] (0.5,0.5)++(-45:.02) -- ++(0,-.25) arc (270:360:.25) -- cycle;
+
+  \fill[white] (.5,.5)++(-40:.2) circle (.035);
+  \fill[white] (.5,.5)++(-60:.2) circle (.015);
+\end{tikzpicture}
+
+\end{document}

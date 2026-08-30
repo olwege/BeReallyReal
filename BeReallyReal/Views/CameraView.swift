@@ -98,7 +98,8 @@ struct CameraView: View {
                     backImage: capturedBackImage,
                     frontImage: capturedFrontImage,
                     includeLocationByDefault: $includeLocationByDefault,
-                    save: { caption, shouldIncludeLocation in
+                    allowsDateAdjustment: Config.allowCaptureDateAdjustment,
+                    save: { caption, shouldIncludeLocation, captureDate in
                         Task {
                             let coordinate = shouldIncludeLocation
                                 ? await locationProvider.requestCurrentCoordinate()
@@ -109,9 +110,13 @@ struct CameraView: View {
                                     backImage: capturedBackImage,
                                     frontImage: capturedFrontImage,
                                     caption: caption,
-                                    location: coordinate
+                                    location: coordinate,
+                                    date: captureDate
                                 )
-                                NotificationScheduler.scheduleNext()
+
+                                let hasPhotoToday = store.hasEntry(for: Date())
+                                NotificationScheduler.requestPermission(hasPhotoToday: hasPhotoToday)
+
                                 dismiss()
                             }
                         }
@@ -132,10 +137,12 @@ private struct CaptionAfterCaptureView: View {
     let frontImage: UIImage
     @Binding var includeLocationByDefault: Bool
 
-    let save: (_ caption: String, _ shouldIncludeLocation: Bool) -> Void
+    let allowsDateAdjustment: Bool
+    let save: (_ caption: String, _ shouldIncludeLocation: Bool, _ captureDate: Date) -> Void
     let retake: () -> Void
 
     @State private var caption = ""
+    @State private var captureDate = Date()
     @FocusState private var captionIsFocused: Bool
 
     var body: some View {
@@ -194,6 +201,14 @@ private struct CaptionAfterCaptureView: View {
 
                 Toggle("Add location", isOn: $includeLocationByDefault)
 
+                if allowsDateAdjustment {
+                    DatePicker(
+                        "Memory date",
+                        selection: $captureDate,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                }
+
                 Spacer()
             }
             .padding()
@@ -208,7 +223,7 @@ private struct CaptionAfterCaptureView: View {
 
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        save(caption, includeLocationByDefault)
+                        save(caption, includeLocationByDefault, captureDate)
                     }
                 }
             }

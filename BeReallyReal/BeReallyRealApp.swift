@@ -23,9 +23,6 @@ struct BeReallyRealApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
-                .onAppear {
-                    NotificationScheduler.requestPermission()
-                }
         }
     }
 }

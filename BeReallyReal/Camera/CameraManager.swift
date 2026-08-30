@@ -37,7 +37,17 @@ final class CameraManager: NSObject, ObservableObject {
     private var backDevice: AVCaptureDevice?
     private var frontDevice: AVCaptureDevice?
 
+    private var backZoomDisplayScale: Double = 1
+
     var previewSession: AVCaptureMultiCamSession { session }
+
+    var backDisplayZoom: Double {
+        backZoom * backZoomDisplayScale
+    }
+
+    var frontDisplayZoom: Double {
+        frontZoom
+    }
 
     func configure() {
         guard AVCaptureMultiCamSession.isMultiCamSupported else {
@@ -65,6 +75,7 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         session.addOutputWithNoConnections(backOutput)
+        configurePhotoOutput(backOutput)
 
         guard let backPort = backCamera.input.ports(
             for: .video,
@@ -99,6 +110,7 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         session.addOutputWithNoConnections(frontOutput)
+        configurePhotoOutput(frontOutput)
 
         guard let frontPort = frontCamera.input.ports(
             for: .video,
@@ -126,6 +138,10 @@ final class CameraManager: NSObject, ObservableObject {
         isReady = true
     }
 
+    private func configurePhotoOutput(_ output: AVCapturePhotoOutput) {
+        output.maxPhotoQualityPrioritization = .quality
+    }
+
     private func makeCameraInput(position: AVCaptureDevice.Position) -> (device: AVCaptureDevice, input: AVCaptureDeviceInput)? {
         for device in preferredVideoDevices(position: position) {
             guard let input = try? AVCaptureDeviceInput(device: device),
@@ -144,11 +160,11 @@ final class CameraManager: NSObject, ObservableObject {
 
         if position == .back {
             preferredTypes = [
-                .builtInUltraWideCamera,
-                .builtInDualWideCamera,
                 .builtInTripleCamera,
+                .builtInDualWideCamera,
                 .builtInDualCamera,
-                .builtInWideAngleCamera
+                .builtInWideAngleCamera,
+                .builtInUltraWideCamera
             ]
         } else {
             preferredTypes = [
@@ -170,19 +186,56 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func updateZoomLimits(for device: AVCaptureDevice, isBackCamera: Bool) {
         let minZoom = Double(device.minAvailableVideoZoomFactor)
-        let maxZoom = min(Double(device.maxAvailableVideoZoomFactor), 8)
+        let maxZoom = min(Double(device.maxAvailableVideoZoomFactor), 16)
         let currentZoom = Double(device.videoZoomFactor)
 
         if isBackCamera {
+            backZoomDisplayScale = userVisibleBackZoomScale(for: device)
+
             backMinZoom = minZoom
             backMaxZoom = max(maxZoom, minZoom)
             backZoom = min(max(currentZoom, backMinZoom), backMaxZoom)
-            setBackZoom(backMinZoom)
+
+            setBackZoom(defaultBackZoomFactor(for: device))
         } else {
             frontMinZoom = minZoom
             frontMaxZoom = max(maxZoom, minZoom)
             frontZoom = min(max(currentZoom, frontMinZoom), frontMaxZoom)
+
             setFrontZoom(frontMinZoom)
+        }
+    }
+
+    private func defaultBackZoomFactor(for device: AVCaptureDevice) -> Double {
+        switch device.deviceType {
+        case .builtInTripleCamera, .builtInDualWideCamera:
+            if let firstSwitchOverFactor = device.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue,
+               firstSwitchOverFactor > 0 {
+                return firstSwitchOverFactor
+            }
+
+            return 1 / backZoomDisplayScale
+
+        default:
+            return 1
+        }
+    }
+
+    private func userVisibleBackZoomScale(for device: AVCaptureDevice) -> Double {
+        switch device.deviceType {
+        case .builtInTripleCamera, .builtInDualWideCamera:
+            if let firstSwitchOverFactor = device.virtualDeviceSwitchOverVideoZoomFactors.first?.doubleValue,
+               firstSwitchOverFactor > 0 {
+                return 1 / firstSwitchOverFactor
+            }
+
+            return 0.5
+
+        case .builtInUltraWideCamera:
+            return 0.5
+
+        default:
+            return 1
         }
     }
 
@@ -293,19 +346,33 @@ final class CameraManager: NSObject, ObservableObject {
             back = image
             group.leave()
         }
-        backOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
+        backOutput.capturePhoto(with: makePhotoSettings(for: backOutput), delegate: self)
 
         group.enter()
         frontCompletion = { image in
             front = image
             group.leave()
         }
-        frontOutput.capturePhoto(with: AVCapturePhotoSettings(), delegate: self)
+        frontOutput.capturePhoto(with: makePhotoSettings(for: frontOutput), delegate: self)
 
         group.notify(queue: .main) {
             self.isCapturing = false
             completion(back, front)
         }
+    }
+
+    private func makePhotoSettings(for output: AVCapturePhotoOutput) -> AVCapturePhotoSettings {
+        let settings: AVCapturePhotoSettings
+
+        if output.availablePhotoCodecTypes.contains(.hevc) {
+            settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
+        } else {
+            settings = AVCapturePhotoSettings()
+        }
+
+        settings.photoQualityPrioritization = output.maxPhotoQualityPrioritization
+
+        return settings
     }
 }
 

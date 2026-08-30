@@ -17,16 +17,35 @@ enum NotificationScheduler {
     private static let defaultWeekdayWindow = ReminderWindow(startHour: 6, endHour: 22)
     private static let defaultWeekendWindow = ReminderWindow(startHour: 8, endHour: 24)
 
-    static func requestPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
-            if granted {
-                scheduleNext()
+    static func requestPermission(hasPhotoToday: Bool = false) {
+        let center = UNUserNotificationCenter.current()
+
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+                    if granted {
+                        scheduleNext(hasPhotoToday: hasPhotoToday)
+                    }
+                }
+
+            case .authorized, .provisional, .ephemeral:
+                scheduleNext(hasPhotoToday: hasPhotoToday)
+
+            case .denied:
+                break
+
+            @unknown default:
+                break
             }
         }
     }
 
     /// Schedules the next notification at a random time inside the configured window.
-    static func scheduleNext() {
+    ///
+    /// If `hasPhotoToday` is true, today is skipped entirely and the reminder is scheduled
+    /// for tomorrow inside the configured window.
+    static func scheduleNext(hasPhotoToday: Bool = false) {
         let center = UNUserNotificationCenter.current()
         center.removePendingNotificationRequests(withIdentifiers: ["dailyPhotoReminder"])
 
@@ -35,7 +54,7 @@ enum NotificationScheduler {
         content.body = "Capture today's moment."
         content.sound = .default
 
-        if Config.testModeFastNotifications {
+        if Config.testModeFastNotifications && !hasPhotoToday {
             let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 60, repeats: true)
             let request = UNNotificationRequest(identifier: "dailyPhotoReminder", content: content, trigger: trigger)
             center.add(request)
@@ -45,14 +64,18 @@ enum NotificationScheduler {
         let calendar = Calendar.current
         let now = Date()
         let today = calendar.startOfDay(for: now)
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? today.addingTimeInterval(24 * 60 * 60)
 
-        let fireDate = randomFireDate(on: today, after: now, calendar: calendar)
-            ?? randomFireDate(
-                on: calendar.date(byAdding: .day, value: 1, to: today) ?? today,
-                after: nil,
-                calendar: calendar
-            )
-            ?? now.addingTimeInterval(60 * 60)
+        let fireDate: Date
+
+        if hasPhotoToday {
+            fireDate = randomFireDate(on: tomorrow, after: nil, calendar: calendar)
+                ?? fallbackFireDate(on: tomorrow, calendar: calendar)
+        } else {
+            fireDate = randomFireDate(on: today, after: now, calendar: calendar)
+                ?? randomFireDate(on: tomorrow, after: nil, calendar: calendar)
+                ?? fallbackFireDate(on: tomorrow, calendar: calendar)
+        }
 
         let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
@@ -91,6 +114,13 @@ enum NotificationScheduler {
         let randomOffset = Int.random(in: 0..<availableMinutes)
 
         return calendar.date(byAdding: .minute, value: randomOffset, to: earliestDate)
+    }
+
+    private static func fallbackFireDate(on day: Date, calendar: Calendar) -> Date {
+        let window = reminderWindow(for: day, calendar: calendar)
+
+        return calendar.date(byAdding: .hour, value: window.startHour, to: day)
+            ?? day.addingTimeInterval(60 * 60)
     }
 
     private static func reminderWindow(for date: Date, calendar: Calendar) -> ReminderWindow {
