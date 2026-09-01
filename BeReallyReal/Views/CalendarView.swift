@@ -61,6 +61,10 @@ struct CalendarView: View {
                     case .map:
                         PhotoMapView(selectedDate: $selectedDate)
                             .environmentObject(store)
+
+                    case .statistics:
+                        StatisticsView()
+                            .environmentObject(store)
                     }
                 }
             }
@@ -515,6 +519,7 @@ private enum CalendarSection: String, CaseIterable, Identifiable {
     case yearsAgo
     case timeFeed
     case map
+    case statistics
 
     var id: String { rawValue }
 
@@ -528,6 +533,8 @@ private enum CalendarSection: String, CaseIterable, Identifiable {
             "Time Feed"
         case .map:
             "Map"
+        case .statistics:
+            "Statistics"
         }
     }
 
@@ -541,6 +548,8 @@ private enum CalendarSection: String, CaseIterable, Identifiable {
             "rectangle.grid.2x2"
         case .map:
             "map"
+        case .statistics:
+            "chart.bar.xaxis"
         }
     }
 }
